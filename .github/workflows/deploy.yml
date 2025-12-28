@@ -1,0 +1,129 @@
+name: Deploy Monitoring Infrastructure
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'plan'
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  TF_VERSION: '1.6.0'
+  ANSIBLE_VERSION: '2.15.0'
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+
+jobs:
+  terraform:
+    name: Terraform
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        run: terraform plan -out=tfplan
+
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.action == 'apply')
+        run: terraform apply -auto-approve tfplan
+
+      - name: Get Terraform Outputs
+        if: github.ref == 'refs/heads/main'
+        id: tf_outputs
+        run: |
+          echo "monitoring_ip=$(terraform output -raw monitoring_server_public_ip)" >> $GITHUB_OUTPUT
+          terraform output -raw ansible_inventory > ../ansible/inventory/hosts.ini
+
+      - name: Upload Ansible Inventory
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ansible-inventory
+          path: ansible/inventory/hosts.ini
+
+  ansible:
+    name: Configure with Ansible
+    needs: terraform
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Ansible
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible==${{ env.ANSIBLE_VERSION }}
+          ansible-galaxy collection install community.docker
+
+      - name: Download Ansible Inventory
+        uses: actions/download-artifact@v4
+        with:
+          name: ansible-inventory
+          path: ansible/inventory/
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.MONITORING_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H $(cat ansible/inventory/hosts.ini | grep -oP '\d+\.\d+\.\d+\.\d+') >> ~/.ssh/known_hosts
+
+      - name: Run Ansible Playbook
+        working-directory: ansible
+        env:
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+        run: |
+          ansible-playbook -i inventory/hosts.ini playbooks/site.yml -v
+
+      - name: Verify Deployment
+        run: |
+          MONITORING_IP=$(cat ansible/inventory/hosts.ini | grep -oP '\d+\.\d+\.\d+\.\d+')
+          curl -f http://${MONITORING_IP}:9090/-/ready || exit 1
+          curl -f http://${MONITORING_IP}:3000/api/health || exit 1
+          echo "✅ Monitoring stack deployed successfully!"

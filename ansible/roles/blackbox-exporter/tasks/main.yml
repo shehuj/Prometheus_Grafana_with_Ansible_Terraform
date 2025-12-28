@@ -1,0 +1,49 @@
+---
+# Configure Blackbox Exporter
+
+- name: Create Blackbox Exporter directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /etc/blackbox_exporter
+
+- name: Create Blackbox Exporter configuration
+  copy:
+    content: |
+      modules:
+        http_2xx:
+          prober: http
+          timeout: 5s
+          http:
+            valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+            valid_status_codes: []  # Defaults to 2xx
+            method: GET
+            follow_redirects: true
+            preferred_ip_protocol: "ip4"
+
+        http_post_2xx:
+          prober: http
+          timeout: 5s
+          http:
+            method: POST
+            valid_status_codes: []
+
+        tcp_connect:
+          prober: tcp
+          timeout: 5s
+
+        icmp:
+          prober: icmp
+          timeout: 5s
+          icmp:
+            preferred_ip_protocol: "ip4"
+    dest: /etc/blackbox_exporter/config.yml
+    mode: '0644'
+
+- name: Pull Blackbox Exporter Docker image
+  community.docker.docker_image:
+    name: prom/blackbox-exporter
+    tag: latest
+    source: pull

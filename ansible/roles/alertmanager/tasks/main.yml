@@ -1,0 +1,53 @@
+---
+# Configure AlertManager
+
+- name: Create AlertManager directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+    owner: nobody
+    group: nogroup
+  loop:
+    - /etc/alertmanager
+    - /var/lib/alertmanager
+
+- name: Create default AlertManager configuration
+  copy:
+    content: |
+      global:
+        resolve_timeout: 5m
+
+      route:
+        group_by: ['alertname', 'cluster', 'service']
+        group_wait: 10s
+        group_interval: 10s
+        repeat_interval: 12h
+        receiver: 'default'
+
+      receivers:
+        - name: 'default'
+          # Configure your notification channels here
+          # email_configs:
+          #   - to: 'alerts@example.com'
+          # slack_configs:
+          #   - api_url: 'YOUR_SLACK_WEBHOOK_URL'
+          #     channel: '#alerts'
+
+      inhibit_rules:
+        - source_match:
+            severity: 'critical'
+          target_match:
+            severity: 'warning'
+          equal: ['alertname', 'cluster', 'service']
+    dest: /etc/alertmanager/alertmanager.yml
+    mode: '0644'
+
+- name: Ensure AlertManager data directory has correct permissions
+  file:
+    path: /var/lib/alertmanager
+    state: directory
+    mode: '0755'
+    owner: nobody
+    group: nogroup
+    recurse: yes

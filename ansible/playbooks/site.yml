@@ -1,0 +1,118 @@
+---
+# Main Ansible Playbook for Monitoring Infrastructure
+# Deploys Prometheus, Grafana, and AlertManager using Docker Compose
+
+- name: Deploy Complete Monitoring Stack
+  hosts: monitoring
+  become: true
+  gather_facts: true
+
+  vars:
+    prometheus_version: "v2.48.1"
+    grafana_version: "10.2.3"
+    alertmanager_version: "v0.26.0"
+    prometheus_retention: "30d"
+    grafana_admin_password: "{{ lookup('env', 'GRAFANA_ADMIN_PASSWORD') | default('admin', true) }}"
+
+  roles:
+    - docker
+    - prometheus
+    - grafana
+    - alertmanager
+    - node-exporter
+    - blackbox-exporter
+
+  tasks:
+    - name: Deploy monitoring stack with Docker Compose
+      community.docker.docker_compose:
+        project_name: monitoring
+        definition:
+          version: '3.8'
+
+          services:
+            prometheus:
+              image: "prom/prometheus:{{ prometheus_version }}"
+              container_name: prometheus
+              restart: unless-stopped
+              ports:
+                - "9090:9090"
+              volumes:
+                - /etc/prometheus:/etc/prometheus
+                - /var/lib/prometheus:/prometheus
+              command:
+                - '--config.file=/etc/prometheus/prometheus.yml'
+                - '--storage.tsdb.path=/prometheus'
+                - '--storage.tsdb.retention.time={{ prometheus_retention }}'
+                - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+                - '--web.console.templates=/usr/share/prometheus/consoles'
+                - '--web.enable-lifecycle'
+              networks:
+                - monitoring
+
+            grafana:
+              image: "grafana/grafana:{{ grafana_version }}"
+              container_name: grafana
+              restart: unless-stopped
+              ports:
+                - "3000:3000"
+              volumes:
+                - /var/lib/grafana:/var/lib/grafana
+                - /etc/grafana:/etc/grafana/provisioning
+              environment:
+                - GF_SECURITY_ADMIN_PASSWORD={{ grafana_admin_password }}
+                - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource,grafana-piechart-panel
+                - GF_SERVER_ROOT_URL=http://{{ ansible_host }}:3000
+              networks:
+                - monitoring
+
+            alertmanager:
+              image: "prom/alertmanager:{{ alertmanager_version }}"
+              container_name: alertmanager
+              restart: unless-stopped
+              ports:
+                - "9093:9093"
+              volumes:
+                - /etc/alertmanager:/etc/alertmanager
+                - /var/lib/alertmanager:/alertmanager
+              command:
+                - '--config.file=/etc/alertmanager/alertmanager.yml'
+                - '--storage.path=/alertmanager'
+              networks:
+                - monitoring
+
+          networks:
+            monitoring:
+              driver: bridge
+
+    - name: Wait for Prometheus to be ready
+      uri:
+        url: "http://localhost:9090/-/ready"
+        status_code: 200
+      retries: 30
+      delay: 5
+      register: result
+      until: result.status == 200
+
+    - name: Wait for Grafana to be ready
+      uri:
+        url: "http://localhost:3000/api/health"
+        status_code: 200
+      retries: 30
+      delay: 5
+      register: result
+      until: result.status == 200
+
+    - name: Display access information
+      debug:
+        msg:
+          - "========================================="
+          - "Monitoring Stack Deployed Successfully!"
+          - "========================================="
+          - "Prometheus: http://{{ ansible_host }}:9090"
+          - "Grafana: http://{{ ansible_host }}:3000"
+          - "AlertManager: http://{{ ansible_host }}:9093"
+          - ""
+          - "Grafana default credentials:"
+          - "  Username: admin"
+          - "  Password: {{ grafana_admin_password }}"
+          - "========================================="

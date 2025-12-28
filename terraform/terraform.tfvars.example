@@ -1,0 +1,61 @@
+# Terraform Variables Configuration
+# Copy this file to terraform.tfvars and update with your values
+
+# Project Configuration
+project_name = "monitoring"
+environment  = "production"
+aws_region   = "us-east-1"
+
+# Network Configuration
+vpc_cidr            = "10.0.0.0/16"
+public_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24"]
+availability_zones  = ["us-east-1a", "us-east-1b"]
+
+# EC2 Instance Configuration
+instance_type      = "t3.large"    # t3.medium for dev, t3.large for prod
+volume_size        = 50            # GB - Increase for more metrics retention
+monitoring_enabled = true
+
+# Access Control
+# IMPORTANT: Replace YOUR_IP with your actual IP address
+allowed_ssh_cidrs = ["YOUR_IP/32"]  # SSH access - Use your public IP
+allowed_web_cidrs = ["0.0.0.0/0"]   # Web UI access - Restrict in production
+
+# Monitoring Configuration
+prometheus_retention_days = 30  # Days to retain metrics
+backup_retention_days     = 90  # Days to retain S3 backups
+
+# VPC Flow Logs (Optional)
+enable_flow_logs = false  # Set to true for production
+
+# Resource Tags
+tags = {
+  Project     = "Monitoring"
+  Environment = "Production"
+  ManagedBy   = "Terraform"
+  Owner       = "DevOps Team"
+}
+
+# Example configurations for different environments:
+
+# Development Environment:
+# instance_type = "t3.medium"
+# volume_size = 30
+# prometheus_retention_days = 7
+# allowed_ssh_cidrs = ["YOUR_IP/32"]
+# allowed_web_cidrs = ["YOUR_IP/32"]
+
+# Staging Environment:
+# instance_type = "t3.large"
+# volume_size = 40
+# prometheus_retention_days = 15
+# allowed_ssh_cidrs = ["OFFICE_IP_RANGE/24"]
+# allowed_web_cidrs = ["OFFICE_IP_RANGE/24"]
+
+# Production Environment:
+# instance_type = "t3.xlarge"
+# volume_size = 100
+# prometheus_retention_days = 60
+# enable_flow_logs = true
+# allowed_ssh_cidrs = ["BASTION_IP/32"]
+# allowed_web_cidrs = ["OFFICE_IP_RANGE/24", "VPN_IP_RANGE/24"]
