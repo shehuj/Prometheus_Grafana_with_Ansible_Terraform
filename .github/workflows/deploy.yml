@@ -64,6 +64,7 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
+          terraform-force-color: true
 
       - name: Terraform Init
         run: terraform init
@@ -156,6 +157,7 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
+          ansible-force-color: true
 
       - name: Download Ansible Inventory
         uses: actions/download-artifact@v4
@@ -201,7 +203,7 @@ jobs:
         env:
           GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
         run: |
-          ansible-playbook -i inventory/hosts.ini playbooks/site.yml -v
+          ansible-playbook -i inventory/hosts.ini playbooks/site.yml
 
       - name: Verify Deployment
         run: |

@@ -30,16 +30,7 @@
       debug:
         msg: "Docker is installed: {{ docker_version.stdout }}"
 
-    - name: Install Python dependencies for Docker
-      apt:
-        name:
-          - python3-pip
-          - python3-docker
-        state: present
-        update_cache: yes
-      become: yes
-
-    - name: Install Docker SDK for Python via pip (fallback)
+    - name: Install Docker SDK for Python via pip
       pip:
         name:
           - docker>=6.0.0
