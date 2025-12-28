@@ -30,6 +30,24 @@
       debug:
         msg: "Docker is installed: {{ docker_version.stdout }}"
 
+    - name: Install Python dependencies for Docker
+      apt:
+        name:
+          - python3-pip
+          - python3-docker
+        state: present
+        update_cache: yes
+      become: yes
+
+    - name: Install Docker SDK for Python via pip (fallback)
+      pip:
+        name:
+          - docker>=6.0.0
+          - docker-compose>=1.29.0
+        state: present
+        executable: pip3
+      become: yes
+
   roles:
     - prometheus
     - grafana
