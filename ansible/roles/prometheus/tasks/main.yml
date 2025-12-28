@@ -1,23 +1,21 @@
 ---
 # Configure Prometheus
 
-- name: Create Prometheus directories
+- name: Ensure Prometheus rules directory exists
   file:
-    path: "{{ item }}"
+    path: /etc/prometheus/rules
     state: directory
     mode: '0755'
     owner: nobody
     group: nogroup
-  loop:
-    - /etc/prometheus
-    - /etc/prometheus/rules
-    - /var/lib/prometheus
 
 - name: Copy Prometheus configuration
   copy:
     src: "{{ playbook_dir }}/../configs/prometheus/prometheus.yml"
     dest: /etc/prometheus/prometheus.yml
     mode: '0644'
+    owner: nobody
+    group: nogroup
   notify: reload prometheus
 
 - name: Copy Prometheus alert rules
@@ -25,13 +23,6 @@
     src: "{{ playbook_dir }}/../configs/prometheus/alert-rules.yml"
     dest: /etc/prometheus/rules/alert-rules.yml
     mode: '0644'
-  notify: reload prometheus
-
-- name: Ensure Prometheus data directory has correct permissions
-  file:
-    path: /var/lib/prometheus
-    state: directory
-    mode: '0755'
     owner: nobody
     group: nogroup
-    recurse: yes
+  notify: reload prometheus
