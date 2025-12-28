@@ -9,6 +9,6 @@
 
 - name: Copy Grafana datasource configuration
   copy:
-    src: "{{ playbook_dir }}/../configs/grafana/datasources.yml"
+    src: "{{ playbook_dir }}/../../configs/grafana/datasources.yml"
     dest: /etc/grafana/datasources/datasources.yml
     mode: '0644'

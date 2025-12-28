@@ -11,7 +11,7 @@
 
 - name: Copy Prometheus configuration
   copy:
-    src: "{{ playbook_dir }}/../configs/prometheus/prometheus.yml"
+    src: "{{ playbook_dir }}/../../configs/prometheus/prometheus.yml"
     dest: /etc/prometheus/prometheus.yml
     mode: '0644'
     owner: nobody
@@ -20,7 +20,7 @@
 
 - name: Copy Prometheus alert rules
   copy:
-    src: "{{ playbook_dir }}/../configs/prometheus/alert-rules.yml"
+    src: "{{ playbook_dir }}/../../configs/prometheus/alert-rules.yml"
     dest: /etc/prometheus/rules/alert-rules.yml
     mode: '0644'
     owner: nobody
