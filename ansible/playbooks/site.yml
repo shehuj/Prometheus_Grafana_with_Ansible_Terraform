@@ -14,12 +14,26 @@
     prometheus_retention: "30d"
     grafana_admin_password: "{{ lookup('env', 'GRAFANA_ADMIN_PASSWORD') | default('admin', true) }}"
 
+  pre_tasks:
+    - name: Wait for cloud-init to complete
+      ansible.builtin.wait_for:
+        path: /var/log/user-data-complete.log
+        timeout: 600
+        msg: "Waiting for user-data script to complete..."
+
+    - name: Verify Docker is installed
+      command: docker --version
+      register: docker_version
+      changed_when: false
+
+    - name: Display Docker version
+      debug:
+        msg: "Docker is installed: {{ docker_version.stdout }}"
+
   roles:
-    - docker
     - prometheus
     - grafana
     - alertmanager
-    - node-exporter
     - blackbox-exporter
 
   tasks:
