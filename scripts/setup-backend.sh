@@ -5,8 +5,8 @@
 set -e
 
 REGION="${AWS_REGION:-us-east-1}"
-BUCKET_NAME="monitoring-terraform-state"
-DYNAMODB_TABLE="monitoring-terraform-locks"
+BUCKET_NAME="ec2-shutdown-lambda-bucket"
+DYNAMODB_TABLE="dyning_table"
 
 echo "========================================="
 echo "Setting up Terraform Backend"
