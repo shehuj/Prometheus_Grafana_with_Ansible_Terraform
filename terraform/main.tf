@@ -16,11 +16,11 @@ terraform {
   }
 
   backend "s3" {
-    bucket         = "monitoring-terraform-state"
+    bucket         = "ec2-shutdown-lambda-bucket"
     key            = "prometheus-grafana/terraform.tfstate"
     region         = "us-east-1"
     encrypt        = true
-    dynamodb_table = "monitoring-terraform-locks"
+    dynamodb_table = "dyning_table"
   }
 }
 
