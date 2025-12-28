@@ -1,13 +1,12 @@
 ---
 # Configure Blackbox Exporter
 
-- name: Create Blackbox Exporter directories
+- name: Create Blackbox Exporter configuration directory
   file:
-    path: "{{ item }}"
+    path: /etc/blackbox_exporter
     state: directory
     mode: '0755'
-  loop:
-    - /etc/blackbox_exporter
+  become: yes
 
 - name: Create Blackbox Exporter configuration
   copy:
@@ -41,9 +40,4 @@
             preferred_ip_protocol: "ip4"
     dest: /etc/blackbox_exporter/config.yml
     mode: '0644'
-
-- name: Pull Blackbox Exporter Docker image
-  community.docker.docker_image:
-    name: prom/blackbox-exporter
-    tag: latest
-    source: pull
+  become: yes
