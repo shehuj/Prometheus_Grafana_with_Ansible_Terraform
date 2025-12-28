@@ -171,21 +171,45 @@ jobs:
         run: |
           # Get monitoring server IP
           MONITORING_IP=$(cat ansible/inventory/hosts.ini | grep -oP '\d+\.\d+\.\d+\.\d+')
+          echo "Monitoring server IP: $MONITORING_IP"
+
+          # Verify SSM parameter exists
+          echo "Checking if SSH key exists in SSM: $SSH_KEY_PARAM"
+          if ! aws ssm describe-parameters --parameter-filters "Key=Name,Values=$SSH_KEY_PARAM" --query 'Parameters[0].Name' --output text 2>/dev/null | grep -q "$SSH_KEY_PARAM"; then
+            echo "ERROR: SSH key parameter not found in SSM: $SSH_KEY_PARAM"
+            echo "Available parameters:"
+            aws ssm describe-parameters --query 'Parameters[*].[Name,Type]' --output table || echo "Failed to list parameters"
+            exit 1
+          fi
 
           # Retrieve SSH private key from AWS SSM Parameter Store
-          echo "Retrieving SSH key from SSM: $SSH_KEY_PARAM"
+          echo "Retrieving SSH key from SSM..."
           mkdir -p ~/.ssh
-          aws ssm get-parameter \
+
+          if ! aws ssm get-parameter \
             --name "$SSH_KEY_PARAM" \
             --with-decryption \
             --query 'Parameter.Value' \
-            --output text > ~/.ssh/id_rsa
+            --output text > ~/.ssh/id_rsa 2>&1; then
+            echo "ERROR: Failed to retrieve SSH key from SSM"
+            echo "Checking AWS credentials and permissions..."
+            aws sts get-caller-identity || echo "AWS credentials issue"
+            exit 1
+          fi
+
+          # Verify key was retrieved
+          if [ ! -s ~/.ssh/id_rsa ]; then
+            echo "ERROR: SSH key file is empty"
+            exit 1
+          fi
+
+          echo "SSH key retrieved successfully ($(wc -l < ~/.ssh/id_rsa) lines)"
 
           # Set correct permissions
           chmod 600 ~/.ssh/id_rsa
 
           # Add host to known_hosts
-          ssh-keyscan -H $MONITORING_IP >> ~/.ssh/known_hosts
+          ssh-keyscan -H $MONITORING_IP >> ~/.ssh/known_hosts 2>/dev/null || echo "Warning: ssh-keyscan failed, continuing..."
 
           # Wait for SSH to be ready (EC2 instance might still be initializing)
           echo "Waiting for SSH to be ready on $MONITORING_IP..."
@@ -196,6 +220,14 @@ jobs:
             fi
             echo "Attempt $i/30: SSH not ready yet, waiting 10 seconds..."
             sleep 10
+
+            # On last attempt, show detailed error
+            if [ $i -eq 30 ]; then
+              echo "ERROR: Failed to establish SSH connection after 30 attempts"
+              echo "Trying one more time with verbose output:"
+              ssh -v -o ConnectTimeout=5 -o StrictHostKeyChecking=no ubuntu@$MONITORING_IP "echo SSH is ready" || true
+              exit 1
+            fi
           done
 
       - name: Run Ansible Playbook
