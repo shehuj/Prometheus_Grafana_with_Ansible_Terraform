@@ -90,7 +90,7 @@ Before deploying this infrastructure, ensure you have:
 ### Required Tools
 
 - **Terraform** >= 1.6.0 ([Install](https://developer.hashicorp.com/terraform/downloads))
-- **Ansible** >= 2.15.0 ([Install](https://docs.ansible.com/ansible/latest/installation_guide/intro_installation.html))
+- **Ansible** >= 8.0.0 ([Install](https://docs.ansible.com/ansible/latest/installation_guide/intro_installation.html))
 - **AWS CLI** ([Install](https://aws.amazon.com/cli/))
 - **Git**
 
