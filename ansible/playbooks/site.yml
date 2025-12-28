@@ -30,15 +30,6 @@
       debug:
         msg: "Docker is installed: {{ docker_version.stdout }}"
 
-    - name: Install Docker SDK for Python via pip
-      pip:
-        name:
-          - docker==5.0.3
-          - docker-compose==1.29.2
-        state: present
-        executable: pip3
-      become: yes
-
   roles:
     - prometheus
     - grafana
@@ -46,15 +37,22 @@
     - blackbox-exporter
 
   tasks:
-    - name: Deploy monitoring stack with Docker Compose
-      community.docker.docker_compose:
-        project_name: monitoring
-        definition:
+    - name: Ensure monitoring directory exists
+      become: yes
+      file:
+        path: /opt/monitoring
+        state: directory
+        mode: '0755'
+
+    - name: Create docker-compose.yml file
+      become: yes
+      copy:
+        content: |
           version: '3.8'
 
           services:
             prometheus:
-              image: "prom/prometheus:{{ prometheus_version }}"
+              image: prom/prometheus:{{ prometheus_version }}
               container_name: prometheus
               restart: unless-stopped
               ports:
@@ -73,7 +71,7 @@
                 - monitoring
 
             grafana:
-              image: "grafana/grafana:{{ grafana_version }}"
+              image: grafana/grafana:{{ grafana_version }}
               container_name: grafana
               restart: unless-stopped
               ports:
@@ -89,7 +87,7 @@
                 - monitoring
 
             alertmanager:
-              image: "prom/alertmanager:{{ alertmanager_version }}"
+              image: prom/alertmanager:{{ alertmanager_version }}
               container_name: alertmanager
               restart: unless-stopped
               ports:
@@ -106,6 +104,25 @@
           networks:
             monitoring:
               driver: bridge
+        dest: /opt/monitoring/docker-compose.yml
+        mode: '0644'
+
+    - name: Deploy monitoring stack with Docker Compose
+      become: yes
+      shell: |
+        cd /opt/monitoring
+        docker compose up -d
+      args:
+        creates: /opt/monitoring/.deployed
+      register: compose_result
+
+    - name: Mark deployment as complete
+      become: yes
+      file:
+        path: /opt/monitoring/.deployed
+        state: touch
+        mode: '0644'
+      when: compose_result.changed
 
     - name: Wait for Prometheus to be ready
       uri:
