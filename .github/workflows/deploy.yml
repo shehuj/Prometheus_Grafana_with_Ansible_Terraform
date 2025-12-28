@@ -30,6 +30,8 @@ jobs:
   terraform:
     name: Terraform
     runs-on: ubuntu-latest
+    outputs:
+      ssh_key_param: ${{ steps.tf_outputs.outputs.ssh_key_param }}
     defaults:
       run:
         working-directory: terraform
@@ -69,6 +71,7 @@ jobs:
         id: tf_outputs
         run: |
           echo "monitoring_ip=$(terraform output -raw monitoring_server_public_ip)" >> $GITHUB_OUTPUT
+          echo "ssh_key_param=$(terraform output -raw ssh_private_key_ssm_parameter)" >> $GITHUB_OUTPUT
           terraform output -raw ansible_inventory > ../ansible/inventory/hosts.ini
 
       - name: Upload Ansible Inventory
@@ -99,6 +102,13 @@ jobs:
           pip install ansible==${{ env.ANSIBLE_VERSION }}
           ansible-galaxy collection install community.docker
 
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
       - name: Download Ansible Inventory
         uses: actions/download-artifact@v4
         with:
@@ -107,12 +117,36 @@ jobs:
 
       - name: Configure SSH
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.MONITORING_SSH_KEY }}
+          SSH_KEY_PARAM: ${{ needs.terraform.outputs.ssh_key_param }}
         run: |
+          # Get monitoring server IP
+          MONITORING_IP=$(cat ansible/inventory/hosts.ini | grep -oP '\d+\.\d+\.\d+\.\d+')
+
+          # Retrieve SSH private key from AWS SSM Parameter Store
+          echo "Retrieving SSH key from SSM: $SSH_KEY_PARAM"
           mkdir -p ~/.ssh
-          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          aws ssm get-parameter \
+            --name "$SSH_KEY_PARAM" \
+            --with-decryption \
+            --query 'Parameter.Value' \
+            --output text > ~/.ssh/id_rsa
+
+          # Set correct permissions
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H $(cat ansible/inventory/hosts.ini | grep -oP '\d+\.\d+\.\d+\.\d+') >> ~/.ssh/known_hosts
+
+          # Add host to known_hosts
+          ssh-keyscan -H $MONITORING_IP >> ~/.ssh/known_hosts
+
+          # Wait for SSH to be ready (EC2 instance might still be initializing)
+          echo "Waiting for SSH to be ready on $MONITORING_IP..."
+          for i in {1..30}; do
+            if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no ubuntu@$MONITORING_IP "echo SSH is ready" 2>/dev/null; then
+              echo "✓ SSH connection established!"
+              break
+            fi
+            echo "Attempt $i/30: SSH not ready yet, waiting 10 seconds..."
+            sleep 10
+          done
 
       - name: Run Ansible Playbook
         working-directory: ansible
