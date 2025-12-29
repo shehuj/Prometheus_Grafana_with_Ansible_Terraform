@@ -207,6 +207,49 @@ You should see:
 | http://localhost:9100/metrics | **UP** | job="node-exporter" | X seconds ago |
 | http://localhost:9115 | **UP** | job="blackbox" | X seconds ago |
 
+## Common Issues
+
+### Issue: Node Exporter Service Fails to Start
+
+**Error:**
+```
+Job for prometheus-node-exporter.service failed because the control process exited with error code.
+```
+
+**Root Causes:**
+1. Service configuration not loaded before starting
+2. Port 9100 already in use
+3. Systemd unit file issues
+
+**Fix Applied:**
+The node-exporter role now:
+1. Stops the service if it auto-started after installation
+2. Checks if port 9100 is available
+3. Configures the service properly
+4. Reloads systemd daemon
+5. Starts the service with proper configuration
+6. Provides detailed diagnostics if startup fails
+
+**Manual Fix:**
+```bash
+# Check systemd unit configuration
+systemctl cat prometheus-node-exporter
+
+# Check if port is in use
+netstat -tlnp | grep :9100
+
+# Check service status
+systemctl status prometheus-node-exporter
+
+# Check logs
+journalctl -xeu prometheus-node-exporter -n 50
+
+# Try manual start
+sudo systemctl stop prometheus-node-exporter
+sudo systemctl daemon-reload
+sudo systemctl start prometheus-node-exporter
+```
+
 ## Troubleshooting
 
 ### Node Exporter Still Not Working

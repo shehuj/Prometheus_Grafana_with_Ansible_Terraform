@@ -6,12 +6,34 @@
     name: prometheus-node-exporter
     state: present
     update_cache: yes
+  register: node_exporter_install
 
-- name: Ensure Node Exporter is running
+- name: Stop Node Exporter if it auto-started
   systemd:
     name: prometheus-node-exporter
-    state: started
-    enabled: yes
+    state: stopped
+  when: node_exporter_install.changed
+  ignore_errors: yes
+
+- name: Check if port 9100 is already in use
+  shell: netstat -tlnp | grep :9100 || true
+  register: port_check
+  changed_when: false
+
+- name: Display port status
+  debug:
+    msg: "Port 9100 status: {{ port_check.stdout if port_check.stdout else 'Available' }}"
+
+- name: Check systemd unit file
+  command: systemctl cat prometheus-node-exporter
+  register: systemd_unit
+  changed_when: false
+  failed_when: false
+
+- name: Display systemd unit configuration
+  debug:
+    var: systemd_unit.stdout_lines
+  when: systemd_unit.stdout_lines is defined
 
 - name: Configure Node Exporter to listen on all interfaces
   lineinfile:
@@ -19,4 +41,48 @@
     regexp: '^ARGS='
     line: 'ARGS="--web.listen-address=:9100"'
     create: yes
-  notify: restart node-exporter
+  register: node_exporter_config
+
+- name: Reload systemd daemon if config changed
+  systemd:
+    daemon_reload: yes
+  when: node_exporter_config.changed
+
+- name: Ensure Node Exporter is running
+  systemd:
+    name: prometheus-node-exporter
+    state: started
+    enabled: yes
+    daemon_reload: yes
+  register: node_exporter_start
+
+- name: Get Node Exporter service status if start failed
+  command: systemctl status prometheus-node-exporter
+  register: node_exporter_status
+  when: node_exporter_start.failed is defined and node_exporter_start.failed
+  failed_when: false
+
+- name: Display Node Exporter service status
+  debug:
+    var: node_exporter_status.stdout_lines
+  when: node_exporter_status.stdout_lines is defined
+
+- name: Get Node Exporter journal logs if start failed
+  command: journalctl -xeu prometheus-node-exporter -n 50 --no-pager
+  register: node_exporter_logs
+  when: node_exporter_start.failed is defined and node_exporter_start.failed
+  failed_when: false
+
+- name: Display Node Exporter logs
+  debug:
+    var: node_exporter_logs.stdout_lines
+  when: node_exporter_logs.stdout_lines is defined
+
+- name: Verify Node Exporter is accessible
+  uri:
+    url: http://localhost:9100/metrics
+    status_code: 200
+  retries: 5
+  delay: 2
+  register: node_exporter_check
+  until: node_exporter_check.status == 200
