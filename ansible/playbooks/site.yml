@@ -153,6 +153,30 @@
         mode: '0644'
       when: compose_result.changed
 
+    - name: Wait for containers to start
+      pause:
+        seconds: 10
+
+    - name: Check Docker containers status
+      become: yes
+      command: docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+      register: docker_status
+
+    - name: Display Docker status
+      debug:
+        var: docker_status.stdout_lines
+
+    - name: Check blackbox-exporter logs if container exists
+      become: yes
+      command: docker logs blackbox-exporter --tail 50
+      register: blackbox_logs
+      failed_when: false
+
+    - name: Display blackbox-exporter logs
+      debug:
+        var: blackbox_logs.stdout_lines
+      when: blackbox_logs.rc == 0
+
     - name: Wait for Prometheus to be ready
       uri:
         url: "http://localhost:9090/-/ready"
