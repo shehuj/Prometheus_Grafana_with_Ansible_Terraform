@@ -1,0 +1,396 @@
+name: Cleanup Monitoring Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      cleanup_level:
+        description: 'Cleanup level'
+        required: true
+        default: 'stop-services'
+        type: choice
+        options:
+          - stop-services        # Stop services only (easy restart)
+          - remove-containers    # Stop and remove containers, preserve data
+          - full-cleanup         # Remove everything including volumes
+          - destroy-infrastructure  # Destroy Terraform infrastructure too
+
+      confirmation:
+        description: 'Type "CLEANUP" to confirm (required for full-cleanup or destroy)'
+        required: false
+        type: string
+
+      environment:
+        description: 'Environment to clean up'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - production
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  TF_VERSION: '1.6.0'
+  ANSIBLE_VERSION: '8.5.0'
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ANSIBLE_HOST_KEY_CHECKING: 'False'
+
+jobs:
+  validate-inputs:
+    name: Validate Cleanup Request
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate confirmation for destructive operations
+        if: inputs.cleanup_level == 'full-cleanup' || inputs.cleanup_level == 'destroy-infrastructure'
+        run: |
+          if [ "${{ inputs.confirmation }}" != "CLEANUP" ]; then
+            echo "❌ Confirmation required for destructive operations"
+            echo "You must type 'CLEANUP' in the confirmation field"
+            exit 1
+          fi
+          echo "✅ Confirmation validated"
+
+      - name: Validate production cleanup
+        if: inputs.environment == 'production'
+        run: |
+          echo "⚠️  WARNING: Cleaning up PRODUCTION environment"
+          echo "Environment: ${{ inputs.environment }}"
+          echo "Cleanup Level: ${{ inputs.cleanup_level }}"
+
+          if [ "${{ inputs.cleanup_level }}" == "destroy-infrastructure" ]; then
+            echo "❌ Production infrastructure destruction requires manual approval"
+            echo "Please use Terraform destroy manually or create a separate workflow with approvals"
+            exit 1
+          fi
+
+      - name: Display cleanup plan
+        run: |
+          echo "=========================================="
+          echo "Cleanup Plan"
+          echo "=========================================="
+          echo "Environment: ${{ inputs.environment }}"
+          echo "Cleanup Level: ${{ inputs.cleanup_level }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "=========================================="
+
+  ansible-cleanup:
+    name: Run Ansible Cleanup
+    needs: validate-inputs
+    runs-on: ubuntu-latest
+    if: inputs.cleanup_level != 'destroy-infrastructure'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Ansible
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible==${{ env.ANSIBLE_VERSION }}
+          ansible-galaxy collection install community.docker
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get infrastructure information
+        id: infra_info
+        working-directory: terraform
+        run: |
+          # Initialize Terraform to read outputs
+          terraform init
+
+          # Get monitoring server IP
+          MONITORING_IP=$(terraform output -raw monitoring_server_public_ip 2>/dev/null || echo "")
+
+          if [ -z "$MONITORING_IP" ]; then
+            echo "⚠️  No infrastructure found or not deployed"
+            echo "infrastructure_exists=false" >> $GITHUB_OUTPUT
+          else
+            echo "monitoring_ip=$MONITORING_IP" >> $GITHUB_OUTPUT
+            echo "infrastructure_exists=true" >> $GITHUB_OUTPUT
+            echo "✓ Found monitoring server: $MONITORING_IP"
+
+            # Create inventory
+            mkdir -p ../ansible/inventory
+            echo "[monitoring]" > ../ansible/inventory/hosts.ini
+            echo "$MONITORING_IP ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_rsa" >> ../ansible/inventory/hosts.ini
+          fi
+
+      - name: Configure SSH
+        if: steps.infra_info.outputs.infrastructure_exists == 'true'
+        run: |
+          # Get SSH key from SSM
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          SSH_KEY_PARAM=$(cd terraform && terraform output -raw ssh_private_key_ssm_parameter)
+
+          aws ssm get-parameter \
+            --name "$SSH_KEY_PARAM" \
+            --with-decryption \
+            --query 'Parameter.Value' \
+            --output text > ~/.ssh/id_rsa
+
+          chmod 600 ~/.ssh/id_rsa
+
+          # Add host to known_hosts
+          ssh-keyscan -H ${{ steps.infra_info.outputs.monitoring_ip }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Determine cleanup options
+        id: cleanup_opts
+        run: |
+          case "${{ inputs.cleanup_level }}" in
+            stop-services)
+              echo "preserve_data=true" >> $GITHUB_OUTPUT
+              echo "stop_only=true" >> $GITHUB_OUTPUT
+              echo "description=Stopping services only" >> $GITHUB_OUTPUT
+              ;;
+            remove-containers)
+              echo "preserve_data=true" >> $GITHUB_OUTPUT
+              echo "stop_only=false" >> $GITHUB_OUTPUT
+              echo "description=Removing containers, preserving data" >> $GITHUB_OUTPUT
+              ;;
+            full-cleanup)
+              echo "preserve_data=false" >> $GITHUB_OUTPUT
+              echo "stop_only=false" >> $GITHUB_OUTPUT
+              echo "description=Full cleanup including data volumes" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      - name: Run Ansible cleanup playbook
+        if: steps.infra_info.outputs.infrastructure_exists == 'true'
+        working-directory: ansible
+        run: |
+          echo "Running cleanup: ${{ steps.cleanup_opts.outputs.description }}"
+
+          ansible-playbook -i inventory/hosts.ini playbooks/cleanup.yml \
+            -e preserve_data=${{ steps.cleanup_opts.outputs.preserve_data }} \
+            -e stop_only=${{ steps.cleanup_opts.outputs.stop_only }} \
+            -v
+
+      - name: Verify cleanup
+        if: steps.infra_info.outputs.infrastructure_exists == 'true'
+        run: |
+          echo "Verifying cleanup on ${{ steps.infra_info.outputs.monitoring_ip }}..."
+
+          # Check container status
+          ssh -o StrictHostKeyChecking=no ubuntu@${{ steps.infra_info.outputs.monitoring_ip }} \
+            'docker ps -a && echo "---" && docker volume ls' || true
+
+      - name: Post cleanup summary
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "Cleanup Summary"
+          echo "=========================================="
+          echo "Environment: ${{ inputs.environment }}"
+          echo "Cleanup Level: ${{ inputs.cleanup_level }}"
+          echo "Description: ${{ steps.cleanup_opts.outputs.description }}"
+          echo "Infrastructure Exists: ${{ steps.infra_info.outputs.infrastructure_exists }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "=========================================="
+
+  terraform-destroy:
+    name: Destroy Terraform Infrastructure
+    needs: validate-inputs
+    runs-on: ubuntu-latest
+    if: inputs.cleanup_level == 'destroy-infrastructure'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init
+
+      - name: Get current infrastructure
+        working-directory: terraform
+        run: |
+          echo "Current infrastructure state:"
+          terraform show || echo "No infrastructure deployed"
+
+      - name: Terraform Destroy Plan
+        working-directory: terraform
+        run: |
+          echo "=========================================="
+          echo "⚠️  Resources to be DESTROYED:"
+          echo "=========================================="
+          terraform plan -destroy -no-color
+
+      - name: Final confirmation
+        run: |
+          echo ""
+          echo "⚠️⚠️⚠️ FINAL WARNING ⚠️⚠️⚠️"
+          echo "Destroying infrastructure in 10 seconds..."
+          sleep 10
+
+      - name: Terraform Destroy
+        working-directory: terraform
+        run: |
+          echo "🔥 Destroying infrastructure..."
+          terraform destroy -auto-approve
+          echo "✅ Infrastructure destroyed"
+
+      - name: Verify destruction
+        run: |
+          echo "Verifying infrastructure destruction..."
+
+          # Check for EC2 instances
+          INSTANCES=$(aws ec2 describe-instances \
+            --filters "Name=tag:Project,Values=prometheus-monitoring" \
+            --query 'Reservations[].Instances[?State.Name==`running`].InstanceId' \
+            --output text)
+
+          if [ -z "$INSTANCES" ]; then
+            echo "✅ No running instances found"
+          else
+            echo "⚠️  Warning: Found running instances: $INSTANCES"
+          fi
+
+  create-issue:
+    name: Create Cleanup Report Issue
+    needs: [ansible-cleanup, terraform-destroy]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Create cleanup report issue
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const cleanup_level = '${{ inputs.cleanup_level }}';
+            const environment = '${{ inputs.environment }}';
+            const actor = '${{ github.actor }}';
+            const ansible_result = '${{ needs.ansible-cleanup.result }}';
+            const terraform_result = '${{ needs.terraform-destroy.result }}';
+
+            const getStatusEmoji = (result) => {
+              if (result === 'success') return '✅';
+              if (result === 'failure') return '❌';
+              if (result === 'skipped') return '⏭️';
+              return '❓';
+            };
+
+            let body = `## Cleanup Report
+
+            **Triggered by:** @${actor}
+            **Environment:** \`${environment}\`
+            **Cleanup Level:** \`${cleanup_level}\`
+            **Date:** ${new Date().toISOString()}
+
+            ### Results
+
+            | Step | Status |
+            |------|--------|
+            | Ansible Cleanup | ${getStatusEmoji(ansible_result)} ${ansible_result} |
+            | Terraform Destroy | ${getStatusEmoji(terraform_result)} ${terraform_result} |
+
+            ### Cleanup Actions
+
+            `;
+
+            switch(cleanup_level) {
+              case 'stop-services':
+                body += `- ⏸️ Services stopped\n- 💾 Data preserved\n- 🖥️ Infrastructure running\n\n**To restart:** Re-run deployment workflow`;
+                break;
+              case 'remove-containers':
+                body += `- 🗑️ Containers removed\n- 💾 Data volumes preserved\n- 🖥️ Infrastructure running\n\n**To redeploy:** Run deployment workflow`;
+                break;
+              case 'full-cleanup':
+                body += `- 🗑️ Containers removed\n- 💾 Data volumes deleted\n- 🖥️ Infrastructure still running\n\n**Warning:** All metrics and dashboards deleted`;
+                break;
+              case 'destroy-infrastructure':
+                body += `- 🔥 Infrastructure destroyed\n- 💾 All data deleted\n- 🖥️ EC2 instances terminated\n\n**Warning:** Complete teardown completed`;
+                break;
+            }
+
+            body += `\n\n### Next Steps\n\n`;
+
+            if (cleanup_level === 'stop-services') {
+              body += `- Services can be restarted with Docker Compose\n- Run deployment workflow for full redeploy\n`;
+            } else if (cleanup_level === 'remove-containers') {
+              body += `- Data volumes preserved for reuse\n- Run deployment workflow to redeploy\n- Historical data will be retained\n`;
+            } else if (cleanup_level === 'full-cleanup') {
+              body += `- Infrastructure still running (incurring costs)\n- Consider destroying infrastructure if not needed\n- Fresh deployment will start with empty metrics\n`;
+            } else if (cleanup_level === 'destroy-infrastructure') {
+              body += `- ✅ No infrastructure costs\n- Run Terraform apply to recreate infrastructure\n- All data has been permanently deleted\n`;
+            }
+
+            body += `\n---\n*Automated cleanup report from GitHub Actions*`;
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Cleanup Report - ${environment} - ${cleanup_level}`,
+              body: body,
+              labels: ['cleanup', environment, 'automated']
+            });
+
+  notify-completion:
+    name: Notify Completion
+    needs: [ansible-cleanup, terraform-destroy]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Cleanup completion notification
+        run: |
+          echo "=========================================="
+          echo "Cleanup Workflow Completed"
+          echo "=========================================="
+          echo "Environment: ${{ inputs.environment }}"
+          echo "Cleanup Level: ${{ inputs.cleanup_level }}"
+          echo "Ansible Result: ${{ needs.ansible-cleanup.result }}"
+          echo "Terraform Result: ${{ needs.terraform-destroy.result }}"
+          echo ""
+          echo "Check the Issues tab for detailed cleanup report"
+          echo "=========================================="
+
+      - name: Summary
+        run: |
+          case "${{ inputs.cleanup_level }}" in
+            stop-services)
+              echo "✅ Services stopped successfully"
+              echo "To restart: Re-run deployment workflow"
+              ;;
+            remove-containers)
+              echo "✅ Containers removed, data preserved"
+              echo "To redeploy: Run deployment workflow"
+              ;;
+            full-cleanup)
+              echo "✅ Full cleanup completed"
+              echo "⚠️  All data has been deleted"
+              ;;
+            destroy-infrastructure)
+              echo "✅ Infrastructure destroyed"
+              echo "⚠️  All resources have been terminated"
+              ;;
+          esac
