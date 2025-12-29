@@ -1,0 +1,37 @@
+---
+# YAML Lint Configuration for Ansible and Configuration Files
+
+extends: default
+
+rules:
+  line-length:
+    max: 200
+    level: warning
+
+  indentation:
+    spaces: 2
+    indent-sequences: true
+
+  comments:
+    min-spaces-from-content: 1
+
+  comments-indentation: disable
+
+  truthy:
+    allowed-values: ['true', 'false', 'yes', 'no']
+    check-keys: false
+
+  new-line-at-end-of-file: enable
+
+  trailing-spaces: enable
+
+  empty-lines:
+    max: 2
+
+ignore: |
+  .github/
+  .git/
+  node_modules/
+  *.tfstate
+  *.tfstate.backup
+  .terraform/
