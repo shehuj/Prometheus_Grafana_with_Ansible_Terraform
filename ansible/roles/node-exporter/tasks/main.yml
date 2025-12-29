@@ -55,28 +55,37 @@
     enabled: yes
     daemon_reload: yes
   register: node_exporter_start
+  failed_when: false
 
-- name: Get Node Exporter service status if start failed
-  command: systemctl status prometheus-node-exporter
+- name: Get Node Exporter service status
+  command: systemctl status prometheus-node-exporter --no-pager -l
   register: node_exporter_status
-  when: node_exporter_start.failed is defined and node_exporter_start.failed
+  changed_when: false
   failed_when: false
 
 - name: Display Node Exporter service status
   debug:
-    var: node_exporter_status.stdout_lines
-  when: node_exporter_status.stdout_lines is defined
+    msg: "{{ node_exporter_status.stdout_lines }}"
 
-- name: Get Node Exporter journal logs if start failed
-  command: journalctl -xeu prometheus-node-exporter -n 50 --no-pager
+- name: Get Node Exporter journal logs
+  command: journalctl -xeu prometheus-node-exporter -n 100 --no-pager
   register: node_exporter_logs
-  when: node_exporter_start.failed is defined and node_exporter_start.failed
+  changed_when: false
   failed_when: false
 
 - name: Display Node Exporter logs
   debug:
-    var: node_exporter_logs.stdout_lines
-  when: node_exporter_logs.stdout_lines is defined
+    msg: "{{ node_exporter_logs.stdout_lines }}"
+
+- name: Check config file
+  command: cat /etc/default/prometheus-node-exporter
+  register: node_config_content
+  changed_when: false
+  failed_when: false
+
+- name: Display config file
+  debug:
+    msg: "{{ node_config_content.stdout_lines }}"
 
 - name: Verify Node Exporter is accessible
   uri:
@@ -86,3 +95,16 @@
   delay: 2
   register: node_exporter_check
   until: node_exporter_check.status == 200
+  failed_when: false
+
+- name: Final Node Exporter status
+  debug:
+    msg: |
+      Node Exporter Status:
+      {% if node_exporter_check.status == 200 %}
+      ✓ Node Exporter is running and accessible
+      {% else %}
+      ✗ Node Exporter is NOT accessible
+      Service Status: {{ 'Active' if node_exporter_start.status is defined and node_exporter_start.status.ActiveState == 'active' else 'Inactive/Failed' }}
+      Check the logs above for details
+      {% endif %}
