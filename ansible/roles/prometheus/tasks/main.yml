@@ -9,14 +9,83 @@
     owner: nobody
     group: nogroup
 
-- name: Copy Prometheus configuration
+- name: Ensure Prometheus jobs directory exists
+  file:
+    path: /etc/prometheus/jobs.d
+    state: directory
+    mode: '0755'
+    owner: nobody
+    group: nogroup
+
+- name: Copy Prometheus base configuration
   copy:
     src: "{{ playbook_dir }}/../../configs/prometheus/prometheus.yml"
-    dest: /etc/prometheus/prometheus.yml
+    dest: /etc/prometheus/prometheus-base.yml
     mode: '0644'
     owner: nobody
     group: nogroup
-  notify: reload prometheus
+
+- name: Copy custom jobs template (only if doesn't exist)
+  copy:
+    src: "{{ playbook_dir }}/../../configs/prometheus/custom-jobs.yml"
+    dest: /etc/prometheus/jobs.d/custom-jobs.yml
+    mode: '0644'
+    owner: nobody
+    group: nogroup
+    force: no
+
+- name: Create prometheus configuration manager script
+  copy:
+    content: |
+      #!/bin/bash
+      # Prometheus Configuration Manager
+      # Merges base config with custom jobs
+
+      set -e
+
+      BASE_CONFIG="/etc/prometheus/prometheus-base.yml"
+      CUSTOM_JOBS="/etc/prometheus/jobs.d/custom-jobs.yml"
+      FINAL_CONFIG="/etc/prometheus/prometheus.yml"
+
+      echo "Merging Prometheus configurations..."
+
+      # Copy base config
+      cp "$BASE_CONFIG" "$FINAL_CONFIG"
+
+      # If custom jobs exist and are not empty, append them
+      if [ -f "$CUSTOM_JOBS" ] && [ -s "$CUSTOM_JOBS" ]; then
+        # Check if custom jobs file contains actual jobs (not just comments or [])
+        if grep -v '^#' "$CUSTOM_JOBS" | grep -v '^\s*$' | grep -v '^\[\]' > /dev/null; then
+          echo "" >> "$FINAL_CONFIG"
+          echo "# Custom jobs from jobs.d/custom-jobs.yml" >> "$FINAL_CONFIG"
+          echo "scrape_configs:" >> "$FINAL_CONFIG"
+          grep -v '^#' "$CUSTOM_JOBS" | grep -v '^\s*$' | grep -v '^\[\]' >> "$FINAL_CONFIG" || true
+        fi
+      fi
+
+      # Set correct permissions
+      chown nobody:nogroup "$FINAL_CONFIG"
+      chmod 644 "$FINAL_CONFIG"
+
+      echo "Configuration merged successfully"
+      echo "Reloading Prometheus..."
+
+      # Reload Prometheus if running
+      if curl -s -X POST http://localhost:9090/-/reload > /dev/null 2>&1; then
+        echo "✓ Prometheus reloaded successfully"
+      else
+        echo "⚠ Prometheus not running or reload failed"
+        echo "You may need to restart the Prometheus container:"
+        echo "  docker restart prometheus"
+      fi
+    dest: /usr/local/bin/update-prometheus-config
+    mode: '0755'
+  become: yes
+
+- name: Generate initial prometheus.yml
+  command: /usr/local/bin/update-prometheus-config
+  become: yes
+  changed_when: false
 
 - name: Copy Prometheus alert rules
   copy:

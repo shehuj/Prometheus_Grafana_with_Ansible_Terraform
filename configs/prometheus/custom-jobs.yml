@@ -1,0 +1,48 @@
+# Custom Prometheus Scrape Jobs
+#
+# Add your application monitoring targets here without modifying the main prometheus.yml
+# After adding jobs, reload Prometheus: curl -X POST http://localhost:9090/-/reload
+#
+# Example job configurations:
+
+# Example 1: Simple HTTP application
+# - job_name: 'my-web-app'
+#   static_configs:
+#     - targets: ['app-server-1:8080', 'app-server-2:8080']
+#       labels:
+#         environment: 'production'
+#         team: 'backend'
+
+# Example 2: Application with basic auth
+# - job_name: 'protected-app'
+#   basic_auth:
+#     username: 'prometheus'
+#     password: 'secret'
+#   static_configs:
+#     - targets: ['secure-app:9090']
+
+# Example 3: Multiple target groups
+# - job_name: 'microservices'
+#   static_configs:
+#     - targets: ['service-a:8080', 'service-b:8080']
+#       labels:
+#         service_type: 'api'
+#     - targets: ['service-c:8080', 'service-d:8080']
+#       labels:
+#         service_type: 'worker'
+
+# Example 4: MySQL exporter
+# - job_name: 'mysql'
+#   static_configs:
+#     - targets: ['mysql-exporter:9104']
+#       labels:
+#         database: 'primary'
+
+# Example 5: Redis exporter
+# - job_name: 'redis'
+#   static_configs:
+#     - targets: ['redis-exporter:9121']
+
+# Add your custom jobs below:
+# (Remove the [] if adding jobs, or keep it for an empty list)
+[]

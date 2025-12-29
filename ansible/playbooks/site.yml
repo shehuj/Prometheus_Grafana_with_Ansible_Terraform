@@ -159,8 +159,9 @@
 
     - name: Check Docker containers status
       become: yes
-      command: docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+      shell: docker ps -a --format 'table {{"{{"}}.Names{{"}}"}}\t{{"{{"}}.Status{{"}}"}}\t{{"{{"}}.Ports{{"}}"}}'
       register: docker_status
+      changed_when: false
 
     - name: Display Docker status
       debug:
