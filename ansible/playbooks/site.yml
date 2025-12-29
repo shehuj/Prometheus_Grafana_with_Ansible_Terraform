@@ -128,9 +128,8 @@
       shell: |
         cd /opt/monitoring
         docker compose up -d
-      args:
-        creates: /opt/monitoring/.deployed
       register: compose_result
+      changed_when: "'Creating' in compose_result.stdout or 'Starting' in compose_result.stdout"
 
     - name: Mark deployment as complete
       become: yes
@@ -138,11 +137,24 @@
         path: /opt/monitoring/.deployed
         state: touch
         mode: '0644'
-      when: compose_result.changed
 
     - name: Wait for containers to start
       pause:
         seconds: 10
+
+    - name: Ensure all containers are running
+      become: yes
+      shell: |
+        cd /opt/monitoring
+        # Check each service and start if not running
+        for service in prometheus grafana alertmanager blackbox-exporter; do
+          if ! docker compose ps $service | grep -q "Up"; then
+            echo "Starting $service..."
+            docker compose up -d $service
+          fi
+        done
+      register: container_check
+      changed_when: "'Starting' in container_check.stdout"
 
     - name: Check Docker containers status
       become: yes
