@@ -34,6 +34,7 @@
     - prometheus
     - grafana
     - alertmanager
+    - node-exporter
     - blackbox-exporter
 
   tasks:
@@ -47,7 +48,7 @@
     - name: Verify node_exporter is running
       become: yes
       systemd:
-        name: node_exporter
+        name: prometheus-node-exporter
         state: started
         enabled: yes
 
