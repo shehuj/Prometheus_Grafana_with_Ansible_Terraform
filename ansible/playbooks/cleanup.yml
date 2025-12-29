@@ -1,0 +1,295 @@
+---
+# Manual Cleanup Playbook for Prometheus/Grafana Monitoring Stack
+# This playbook safely removes the monitoring infrastructure
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts cleanup.yml
+#
+# Options (use --extra-vars):
+#   - preserve_data=true        Keep volumes (default: false)
+#   - stop_only=true           Only stop containers, don't remove (default: false)
+#   - remove_compose_file=false Keep docker-compose.yml (default: true)
+#
+
+- name: Cleanup Prometheus/Grafana Monitoring Stack
+  hosts: monitoring
+  become: true
+  gather_facts: true
+
+  vars:
+    preserve_data: "{{ preserve_data | default(false) }}"
+    stop_only: "{{ stop_only | default(false) }}"
+    remove_compose_file: "{{ remove_compose_file | default(true) }}"
+    monitoring_dir: "/opt/monitoring"
+
+    # Docker Compose services
+    services:
+      - prometheus
+      - grafana
+      - alertmanager
+      - blackbox-exporter
+
+    # Docker volumes
+    volumes:
+      - prometheus_data
+      - grafana_data
+      - alertmanager_data
+
+    # System services
+    system_services:
+      - node_exporter
+
+  pre_tasks:
+    - name: Display cleanup configuration
+      debug:
+        msg:
+          - "=========================================="
+          - "Cleanup Configuration:"
+          - "=========================================="
+          - "Preserve Data (volumes): {{ preserve_data }}"
+          - "Stop Only (keep containers): {{ stop_only }}"
+          - "Remove Compose File: {{ remove_compose_file }}"
+          - "=========================================="
+
+    - name: Verify Docker is installed
+      command: docker --version
+      register: docker_version
+      failed_when: false
+      changed_when: false
+
+    - name: Warn if Docker not installed
+      debug:
+        msg: "⚠️  Docker is not installed or not running"
+      when: docker_version.rc != 0
+
+  tasks:
+    # ============================================
+    # DOCKER COMPOSE CLEANUP
+    # ============================================
+    - name: Check if docker-compose.yml exists
+      stat:
+        path: "{{ monitoring_dir }}/docker-compose.yml"
+      register: compose_file
+
+    - name: Display compose file status
+      debug:
+        msg: "{{ 'Docker Compose file found' if compose_file.stat.exists else 'Docker Compose file not found' }}"
+
+    - name: Stop Docker Compose services
+      shell: |
+        cd {{ monitoring_dir }}
+        docker compose down{{ ' --volumes' if not preserve_data else '' }}
+      when:
+        - compose_file.stat.exists
+        - not stop_only
+      register: compose_down
+      failed_when: false
+
+    - name: Stop Docker Compose services (keep containers)
+      shell: |
+        cd {{ monitoring_dir }}
+        docker compose stop
+      when:
+        - compose_file.stat.exists
+        - stop_only
+      register: compose_stop
+      failed_when: false
+
+    - name: Display Docker Compose cleanup result
+      debug:
+        msg: "{{ 'Services stopped and removed' if not stop_only else 'Services stopped (containers preserved)' }}"
+      when: compose_file.stat.exists
+
+    # ============================================
+    # CONTAINER CLEANUP (Fallback)
+    # ============================================
+    - name: Get list of monitoring containers
+      shell: |
+        docker ps -a --filter "name=prometheus" --filter "name=grafana" --filter "name=alertmanager" --filter "name=blackbox-exporter" --format '{{ "{{" }}.Names{{ "}}" }}'
+      register: monitoring_containers
+      changed_when: false
+      failed_when: false
+
+    - name: Display found containers
+      debug:
+        msg: "Found containers: {{ monitoring_containers.stdout_lines | default(['None']) }}"
+
+    - name: Stop and remove individual containers
+      shell: "docker rm -f {{ item }}"
+      loop: "{{ monitoring_containers.stdout_lines }}"
+      when:
+        - monitoring_containers.stdout_lines is defined
+        - monitoring_containers.stdout_lines | length > 0
+        - not stop_only
+      failed_when: false
+
+    # ============================================
+    # SYSTEM SERVICE CLEANUP
+    # ============================================
+    - name: Stop node_exporter service
+      systemd:
+        name: node_exporter
+        state: stopped
+      register: node_exporter_stop
+      failed_when: false
+
+    - name: Check if node_exporter should be disabled
+      debug:
+        msg: "Node exporter stopped but not disabled (use systemctl disable node_exporter to disable)"
+
+    # ============================================
+    # VOLUME CLEANUP
+    # ============================================
+    - name: Get list of Docker volumes
+      command: docker volume ls --format '{{ "{{" }}.Name{{ "}}" }}'
+      register: existing_volumes
+      changed_when: false
+      failed_when: false
+
+    - name: Display volumes status
+      debug:
+        msg: "Found {{ existing_volumes.stdout_lines | length }} volumes"
+
+    - name: Warn about volume deletion
+      pause:
+        prompt: |
+          ⚠️  WARNING: You are about to delete the following volumes:
+          {% for vol in volumes %}
+          - {{ vol }} (contains {% if 'prometheus' in vol %}metrics history{% elif 'grafana' in vol %}dashboards and settings{% elif 'alertmanager' in vol %}alert data{% endif %})
+          {% endfor %}
+
+          This will PERMANENTLY DELETE all monitoring data including:
+          - Historical metrics
+          - Grafana dashboards and datasources
+          - Alert history
+
+          Press Ctrl+C and then 'A' to abort, or Enter to continue
+      when:
+        - not preserve_data
+        - not stop_only
+        - existing_volumes.stdout_lines | length > 0
+
+    - name: Remove Docker volumes
+      command: docker volume rm {{ item }}
+      loop: "{{ volumes }}"
+      when:
+        - not preserve_data
+        - not stop_only
+        - item in existing_volumes.stdout_lines
+      register: volume_removal
+      failed_when: false
+
+    - name: Display volume removal status
+      debug:
+        msg: "{{ 'Monitoring data volumes removed' if not preserve_data else 'Monitoring data volumes preserved' }}"
+
+    # ============================================
+    # NETWORK CLEANUP
+    # ============================================
+    - name: Get monitoring networks
+      shell: docker network ls --filter "name=monitoring" --format '{{ "{{" }}.Name{{ "}}" }}'
+      register: monitoring_networks
+      changed_when: false
+      failed_when: false
+
+    - name: Remove monitoring networks
+      command: docker network rm {{ item }}
+      loop: "{{ monitoring_networks.stdout_lines }}"
+      when:
+        - monitoring_networks.stdout_lines is defined
+        - monitoring_networks.stdout_lines | length > 0
+        - not stop_only
+      failed_when: false
+
+    # ============================================
+    # FILE CLEANUP
+    # ============================================
+    - name: Remove docker-compose.yml
+      file:
+        path: "{{ monitoring_dir }}/docker-compose.yml"
+        state: absent
+      when:
+        - remove_compose_file
+        - not stop_only
+
+    - name: Remove deployment marker
+      file:
+        path: "{{ monitoring_dir }}/.deployed"
+        state: absent
+      when: not stop_only
+
+    - name: Clean up Prometheus configuration directory
+      debug:
+        msg: "Prometheus configs preserved at /etc/prometheus (contains custom-jobs.yml)"
+
+    # ============================================
+    # SYSTEM CLEANUP
+    # ============================================
+    - name: Run Docker system prune
+      command: docker system prune -f
+      register: prune_result
+      changed_when: "'Total reclaimed space' in prune_result.stdout"
+      when: not stop_only
+
+    - name: Display prune results
+      debug:
+        var: prune_result.stdout_lines
+      when: prune_result is defined and prune_result.stdout_lines is defined
+
+  post_tasks:
+    # ============================================
+    # VERIFICATION
+    # ============================================
+    - name: Verify cleanup completion
+      block:
+        - name: Check remaining containers
+          command: docker ps -a
+          register: final_containers
+          changed_when: false
+          failed_when: false
+
+        - name: Check remaining volumes
+          command: docker volume ls
+          register: final_volumes
+          changed_when: false
+          failed_when: false
+
+        - name: Check node_exporter status
+          systemd:
+            name: node_exporter
+          register: node_exporter_status
+          failed_when: false
+
+    - name: Display cleanup summary
+      debug:
+        msg:
+          - "=========================================="
+          - "Cleanup Summary"
+          - "=========================================="
+          - "Docker Compose: {{ 'Stopped and removed' if not stop_only else 'Stopped only' }}"
+          - "Containers: {{ 'Removed' if not stop_only else 'Stopped' }}"
+          - "Volumes: {{ 'Removed' if not preserve_data else 'Preserved' }}"
+          - "Compose File: {{ 'Removed' if remove_compose_file else 'Preserved' }}"
+          - "Node Exporter: {{ node_exporter_status.status.ActiveState | default('unknown') }}"
+          - ""
+          - "Remaining Containers: {{ final_containers.stdout_lines | length - 1 if final_containers.stdout_lines is defined else 0 }}"
+          - "Remaining Volumes: {{ final_volumes.stdout_lines | length - 1 if final_volumes.stdout_lines is defined else 0 }}"
+          - ""
+          - "✅ Cleanup completed successfully!"
+          - "=========================================="
+
+    - name: Display next steps
+      debug:
+        msg:
+          - ""
+          - "Next Steps:"
+          - "1. Review remaining resources: docker ps -a && docker volume ls"
+          - "2. Check Prometheus configs: ls -la /etc/prometheus/jobs.d/"
+          - "3. If Terraform infrastructure is no longer needed:"
+          - "   cd terraform && terraform destroy"
+          - "4. To completely remove monitoring directory:"
+          - "   sudo rm -rf {{ monitoring_dir }}"
+          - ""
+          - "To redeploy monitoring stack:"
+          - "  ansible-playbook -i inventory/hosts playbooks/site.yml"
+          - ""
