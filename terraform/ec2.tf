@@ -86,10 +86,7 @@ resource "aws_iam_role_policy" "monitoring" {
           "ssm:GetParameter",
           "ssm:GetParameters"
         ]
-        Resource = [
-          "arn:aws:ec2:::volume/*", 
-          "arn:aws:logs:::log-group:*"
-        ]
+        Resource = "*"
       },
       {
         Effect = "Allow"
@@ -102,9 +99,34 @@ resource "aws_iam_role_policy" "monitoring" {
           aws_s3_bucket.monitoring_backups.arn,
           "${aws_s3_bucket.monitoring_backups.arn}/*"
         ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ssmmessages:CreateControlChannel",
+          "ssmmessages:CreateDataChannel",
+          "ssmmessages:OpenControlChannel",
+          "ssmmessages:OpenDataChannel",
+          "ssm:UpdateInstanceInformation"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt",
+          "kms:DescribeKey"
+        ]
+        Resource = "*"
       }
     ]
   })
+}
+
+# Attach AWS managed policy for SSM
+resource "aws_iam_role_policy_attachment" "ssm_managed_policy" {
+  role       = aws_iam_role.monitoring.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
 resource "aws_iam_instance_profile" "monitoring" {
