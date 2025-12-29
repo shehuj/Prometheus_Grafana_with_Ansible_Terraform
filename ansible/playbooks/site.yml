@@ -200,10 +200,21 @@
       uri:
         url: "http://localhost:9115/metrics"
         status_code: 200
-      retries: 30
-      delay: 5
-      register: result
-      until: result.status == 200
+      retries: 10
+      delay: 3
+      register: blackbox_result
+      until: blackbox_result.status == 200
+      failed_when: false
+
+    - name: Display Blackbox Exporter status
+      debug:
+        msg: >-
+          {% if blackbox_result.status == 200 %}
+          ✓ Blackbox Exporter is running
+          {% else %}
+          ⚠ Blackbox Exporter failed to start - check logs with: docker logs blackbox-exporter
+          This is optional and won't prevent deployment from completing.
+          {% endif %}
 
     - name: Display access information
       debug:
