@@ -86,7 +86,10 @@ resource "aws_iam_role_policy" "monitoring" {
           "ssm:GetParameter",
           "ssm:GetParameters"
         ]
-        Resource = "*"
+        Resource = [
+          "arn:aws:ec2:::volume/*", 
+          "arn:aws:logs:::log-group:*"
+        ]
       },
       {
         Effect = "Allow"
